@@ -94,9 +94,10 @@ if uploaded_file:
             if gemini_api_key:
                 st.markdown("#### 🤖 AI Explanation")
                 corr_matrix = df.select_dtypes(include='number').corr().to_string()
-                explanation = gemini_explain(
-                    f"The correlation matrix is:\n{corr_matrix}\nExplain the main relationships in plain English."
-                )
+                with st.spinner('🤖 Generating AI explanation for correlation...'):
+                    explanation = gemini_explain(
+                        f"The correlation matrix is:\n{corr_matrix}\nExplain the main relationships in plain English."
+                    )
                 st.write(explanation)
 
         elif analysis_type == "Forecast":
@@ -111,10 +112,11 @@ if uploaded_file:
             # AI explanation
             if gemini_api_key:
                 st.markdown("#### 🤖 AI Forecast Interpretation")
-                explanation = gemini_explain(
-                    f"The dataset's '{selected_column}' values have been forecasted for the next few periods. "
-                    "Explain the forecast trend and whether it shows growth, decline, or stability."
-                )
+                with st.spinner('🤖 Generating AI interpretation of forecast...'):
+                    explanation = gemini_explain(
+                        f"The dataset's '{selected_column}' values have been forecasted for the next few periods. "
+                        "Explain the forecast trend and whether it shows growth, decline, or stability."
+                    )
                 st.write(explanation)
 
         elif analysis_type == "Outliers":
@@ -126,10 +128,11 @@ if uploaded_file:
             # AI explanation
             if gemini_api_key:
                 st.markdown("#### 🤖 AI Outlier Analysis")
-                explanation = gemini_explain(
-                    f"The dataset has these detected outliers: {outliers}. "
-                    "Explain in plain language what these outliers might mean."
-                )
+                with st.spinner('🤖 Generating AI analysis of outliers...'):
+                    explanation = gemini_explain(
+                        f"The dataset has these detected outliers: {outliers}. "
+                        "Explain in plain language what these outliers might mean."
+                    )
                 st.write(explanation)
 
         elif analysis_type == "Insights":
@@ -138,7 +141,8 @@ if uploaded_file:
             if mode == "Rule-based (Offline)":
                 insights = generate_rule_based_insights(df)
             else:
-                insights = generate_llm_insights(df)
+                with st.spinner('🤖 Generating AI-powered insights...'):
+                    insights = generate_llm_insights(df)
 
             for ins in insights:
                 st.write(ins)
