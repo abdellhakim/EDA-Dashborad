@@ -83,7 +83,7 @@ if uploaded_file:
         if analysis_type == "Summary":
             st.subheader("📋 Dataset Summary")
             summary = generate_summary(df)
-            st.dataframe(summary)
+            st.text(summary)
 
         elif analysis_type == "Correlation":
             st.subheader("🔗 Correlation Matrix")
