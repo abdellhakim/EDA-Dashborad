@@ -1,9 +1,13 @@
 import streamlit as st
 import pandas as pd
+from typing_extensions import TypedDict
 from eda_modules.summary import generate_summary
 from eda_modules.correlation import generate_correlation
 from eda_modules.forecast import generate_forecast
 from eda_modules.patterns import detect_outliers
+
+# LangGraph
+from langgraph.graph import StateGraph, START, END
 
 # Gemini API
 try:
@@ -24,11 +28,29 @@ def get_gemini_client():
         return None
     return genai.Client(api_key=gemini_api_key)
 
+# --- Gemini LLM function with skeleton loading ---
+def gemini_explain(prompt):
+    client = get_gemini_client()
+    if not client:
+        return "❌ Gemini API key not provided or google-genai not installed."
+    
+    placeholder = st.empty()
+    placeholder.info("🤖 Thinking... Please wait.")
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+        placeholder.empty()
+        return response.text
+    except Exception as e:
+        placeholder.empty()
+        return f"❌ Gemini error: {e}"
+
 # --- Rule-based Insights Function ---
 def generate_rule_based_insights(df):
     insights = []
     numeric_cols = df.select_dtypes(include="number").columns
-
     for col in numeric_cols:
         mean_val = df[col].mean()
         max_val = df[col].max()
@@ -39,32 +61,70 @@ def generate_rule_based_insights(df):
             insights.append(f"🔽 **{col}** has unusually low min values compared to its mean.")
     return insights or ["No significant patterns detected."]
 
-# --- Gemini LLM Insights ---
-def gemini_explain(prompt):
-    client = get_gemini_client()
-    if not client:
-        return "❌ Gemini API key not provided or google-genai not installed."
+# --- Define LangGraph State ---
+class EDAState(TypedDict):
+    df: pd.DataFrame
+    summary: str
+    ai_summary: str
+    correlation_plot: any
+    ai_correlation: str
+    forecast_plot: any
+    ai_forecast: str
+    outliers: any
+    ai_outliers: str
 
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
-        return response.text
-    except Exception as e:
-        return f"❌ Gemini error: {e}"
+# --- LangGraph Node Functions ---
+def summary_node(state: EDAState) -> EDAState:
+    summary = generate_summary(state["df"])
+    ai_explanation = gemini_explain(f"Here is the dataset summary:\n{summary}\nExplain in plain English.")
+    state["summary"] = summary
+    state["ai_summary"] = ai_explanation
+    return state
 
-# --- Gemini-generated dataset insights ---
-def generate_llm_insights(df):
-    summary = df.describe(include="all").to_string()
-    prompt = f"""
-    You are a data analyst. The dataset summary is:
-    {summary}
-    Provide clear, concise insights in bullet points about patterns, trends, and anomalies.
-    """
-    return gemini_explain(prompt).split("\n")
+def correlation_node(state: EDAState) -> EDAState:
+    fig = generate_correlation(state["df"])
+    corr_matrix = state["df"].select_dtypes(include='number').corr().to_string()
+    ai_explanation = gemini_explain(f"The correlation matrix is:\n{corr_matrix}\nExplain the main relationships.")
+    state["correlation_plot"] = fig
+    state["ai_correlation"] = ai_explanation
+    return state
 
-# File upload
+def forecast_node(state: EDAState) -> EDAState:
+    col = state["df"].select_dtypes(include='number').columns[0] if not state["df"].empty else None
+    if col:
+        fig = generate_forecast(state["df"], col)
+        ai_explanation = gemini_explain(f"Forecast for '{col}'. Explain the trend.")
+    else:
+        fig = None
+        ai_explanation = "No numeric columns available for forecasting."
+    state["forecast_plot"] = fig
+    state["ai_forecast"] = ai_explanation
+    return state
+
+def outlier_node(state: EDAState) -> EDAState:
+    outliers = detect_outliers(state["df"])
+    ai_explanation = gemini_explain(f"Detected outliers: {outliers}. Explain what they might mean.")
+    state["outliers"] = outliers
+    state["ai_outliers"] = ai_explanation
+    return state
+
+# --- Build LangGraph ---
+graph = StateGraph(EDAState)
+
+graph.add_node("Summary", summary_node)
+graph.add_node("Correlation", correlation_node)
+graph.add_node("Forecast", forecast_node)
+graph.add_node("Outliers", outlier_node)
+
+graph.add_edge(START, "Summary")
+graph.add_edge("Summary", "Correlation")
+graph.add_edge("Correlation", "Forecast")
+graph.add_edge("Forecast", "Outliers")
+graph.add_edge("Outliers", END)
+
+eda_app = graph.compile()
+
+# --- Streamlit UI ---
 uploaded_file = st.file_uploader("📤 Upload your CSV file", type=["csv"])
 
 if uploaded_file:
@@ -74,31 +134,18 @@ if uploaded_file:
         st.write("### 📊 Preview of the Dataset")
         st.dataframe(df.head())
 
-        # Tool selection
         analysis_type = st.radio(
             "📌 Select an analysis to perform:",
-            ["Summary", "Correlation", "Forecast", "Outliers", "Insights"]
+            ["Summary", "Correlation", "Forecast", "Outliers", "Insights", "Full AI-Powered Analysis"]
         )
 
         if analysis_type == "Summary":
             st.subheader("📋 Dataset Summary")
-            summary = generate_summary(df)
-            st.text(summary)
+            st.text(generate_summary(df))
 
         elif analysis_type == "Correlation":
             st.subheader("🔗 Correlation Matrix")
-            fig = generate_correlation(df)
-            st.pyplot(fig)
-
-            # AI explanation
-            if gemini_api_key:
-                st.markdown("#### 🤖 AI Explanation")
-                corr_matrix = df.select_dtypes(include='number').corr().to_string()
-                with st.spinner('🤖 Generating AI explanation for correlation...'):
-                    explanation = gemini_explain(
-                        f"The correlation matrix is:\n{corr_matrix}\nExplain the main relationships in plain English."
-                    )
-                st.write(explanation)
+            st.pyplot(generate_correlation(df))
 
         elif analysis_type == "Forecast":
             st.subheader("📈 Forecasting")
@@ -106,46 +153,44 @@ if uploaded_file:
                 "Select a numeric column to forecast",
                 df.select_dtypes(include='number').columns
             )
-            fig = generate_forecast(df, selected_column)
-            st.pyplot(fig)
-
-            # AI explanation
-            if gemini_api_key:
-                st.markdown("#### 🤖 AI Forecast Interpretation")
-                with st.spinner('🤖 Generating AI interpretation of forecast...'):
-                    explanation = gemini_explain(
-                        f"The dataset's '{selected_column}' values have been forecasted for the next few periods. "
-                        "Explain the forecast trend and whether it shows growth, decline, or stability."
-                    )
-                st.write(explanation)
+            st.pyplot(generate_forecast(df, selected_column))
 
         elif analysis_type == "Outliers":
             st.subheader("🚨 Outlier Detection")
             outliers = detect_outliers(df)
-            for col, values in outliers.items():
-                st.write(f"**{col}**: {values if values else 'No outliers found'}")
-
-            # AI explanation
-            if gemini_api_key:
-                st.markdown("#### 🤖 AI Outlier Analysis")
-                with st.spinner('🤖 Generating AI analysis of outliers...'):
-                    explanation = gemini_explain(
-                        f"The dataset has these detected outliers: {outliers}. "
-                        "Explain in plain language what these outliers might mean."
-                    )
-                st.write(explanation)
+            st.write(outliers)
 
         elif analysis_type == "Insights":
             st.subheader("💡 Insights")
             mode = st.radio("Select insight mode:", ["Rule-based (Offline)", "AI-powered (Gemini)"])
             if mode == "Rule-based (Offline)":
-                insights = generate_rule_based_insights(df)
+                for ins in generate_rule_based_insights(df):
+                    st.write(ins)
             else:
-                with st.spinner('🤖 Generating AI-powered insights...'):
-                    insights = generate_llm_insights(df)
+                st.write(gemini_explain(
+                    f"Dataset stats:\n{df.describe(include='all').to_string()}\n"
+                    "Give concise insights about patterns, trends, and anomalies."
+                ))
 
-            for ins in insights:
-                st.write(ins)
+        elif analysis_type == "Full AI-Powered Analysis":
+            results = eda_app.invoke({"df": df})
+
+            st.subheader("📋 Summary")
+            st.text(results["summary"])
+            st.markdown(f"**AI says:** {results['ai_summary']}")
+
+            st.subheader("🔗 Correlation")
+            st.pyplot(results["correlation_plot"])
+            st.markdown(f"**AI says:** {results['ai_correlation']}")
+
+            st.subheader("📈 Forecast")
+            if results["forecast_plot"]:
+                st.pyplot(results["forecast_plot"])
+            st.markdown(f"**AI says:** {results['ai_forecast']}")
+
+            st.subheader("🚨 Outliers")
+            st.write(results["outliers"])
+            st.markdown(f"**AI says:** {results['ai_outliers']}")
 
     except Exception as e:
         st.error(f"❌ Failed to process file: {e}")
